@@ -1,0 +1,11 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <base target="_top">
+    <?!= include('Stylesheet'); ?>
+  </head>
+  <body>
+    <?!= message ? message : '' ?>
+    <? if (detail) { ?><pre><code><?= detail ?></code></pre><? } ?>
+  </body>
+</html>
