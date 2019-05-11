@@ -15,6 +15,7 @@ function doGet(e) {  // Should really be a POST, but that's hard to do from an e
   var response = HtmlService.createTemplateFromFile('Index');
 
   if (!params.calendarId || !params.eventId || !params.action) {
+    response.status = 'error';
     response.message = '<p>Missing parameters:</p>\n<ol>\n';
     if (!params.calendarId) { response.message += '<li>Missing calendarId.</li>\n' }
     if (!params.eventId)    { response.message += '<li>Missing eventId.</li>\n' }
@@ -26,32 +27,25 @@ function doGet(e) {  // Should really be a POST, but that's hard to do from an e
 
   var event = Calendar.Events.get(params.calendarId, params.eventId);
   if (!event) {
+    response.status = 'error';
     response.message = '<p>Event not found.</p>\n';
     response.detail = json_out(e);
     return response.evaluate();
   };
 
-  switch (e.parameter.action) {
-    case 'makefree':
-      event.transparency = 'transparent';
-      if (event.description) { event.description = event.description.replace(/\n?\[busy\]/,'') }
-      event = Calendar.Events.patch(event, params.calendarId, params.eventId);
-      response.message = '<p><a target="_parent" href="' +  event.htmlLink + '">Event</a> made <em>free</em>.</p>\n';
-      response.detail = json_out(event);
-      return response.evaluate();
-    case 'makebusy':
-      event.transparency = 'opaque';
-      event.description = event.description ? event.description + '\n[busy]' : '[busy]';
-      event = Calendar.Events.patch(event, params.calendarId, params.eventId);
-      response.message = '<p><a target="_parent" href="' +  event.htmlLink + '">Event</a> made <em>busy</em>.</p>\n';
-      response.detail = json_out(event);
-      return response.evaluate();
-    default:
-      response.message = '<p>Action not recognised ' +
-        '(expecting "' + ACTION_MAKE_FREE + '" or "' + ACTION_MAKE_BUSY + '"</p>).\n';
-      response.detail = json_out(e);
-      return response.evaluate();
-  }
+  try {
+    makeEventBe({ action: e.parameter.action, calendarId: params.calendarId }, event);
+    response.status = 'success';
+    response.message = '<p><a target="_parent" href="' +  event.htmlLink + '">Event</a> made <em>' +
+      e.parameter.action.replace(/^make/, '') + '</em>.</p>\n';
+    response.detail = json_out(event);
+    return response.evaluate();
+  } catch(err) {
+    response.status = 'error';
+    response.message = '<p>' + err + '</p>\n';
+    response.detail = json_out({ request: e, event: event, error: err });
+    return response.evaluate();
+  }  
 }
 
 
@@ -122,7 +116,7 @@ function sendEmailListingEvents(intro_text, events) {
  * Remove alerts from events.
  * (Returns the event list for chaining.)
  */
-function removeAlertsFromEvents(events) {
+function removeAlertsFromBlockEvents(events) {
   return events.map(function(event) {
     console.log('Removed reminders from event.', event);
     event.reminders.useDefault = false;
@@ -131,6 +125,30 @@ function removeAlertsFromEvents(events) {
     return event;
   })
 }
+
+/**
+ * Change state of event.
+ * (Returns the event for chaining.)
+ */
+function makeEventBe(action, event) {
+  switch (action.action) {
+    case ACTION_MAKE_FREE:
+      event.transparency = 'transparent';
+      if (event.description) { event.description = event.description.replace(/\n?\[busy\]/,'') }
+      event = Calendar.Events.patch(event, action.calendarId, event.id);
+      break;
+    case ACTION_MAKE_BUSY:
+      event.transparency = 'opaque';
+      event.description = event.description ? event.description + '\n[busy]' : '[busy]';
+      event = Calendar.Events.patch(event, action.calendarId, event.id);
+      break;
+    default:
+      throw 'Unrecognised action `' + action.action + '`; I know how to `' + ACTION_MAKE_FREE + '` and `' + ACTION_MAKE_BUSY + '`. ' + json_out(action) + ' | ' + event;
+  }
+
+  return event;
+}
+
 
 /**
  * Check calendar.
@@ -143,8 +161,7 @@ function checkCalendar(calendarId) {
 
   const events = upcomingEvents(calendarId);
 
-  // Remove alerts from 'Block' events.
-  removeAlertsFromEvents(
+  removeAlertsFromBlockEvents(
     events.filter(function(event) {
       return event.summary && event.summary.match(/^block$/i);
     })
@@ -152,18 +169,30 @@ function checkCalendar(calendarId) {
 
   // Email list of noncomplying & blocking events in default calendar.
   if (calendarId === DEFAULT_CALENDAR) {
-    sendEmailListingEvents(
-      "<p>The following calendar events are blocking your availability, but don't contain " +
-      '<code>[busy]</code> in their descriptions. Either make them <em>Free</em> or add ' +
-      "<code>[busy]</code> to their descriptions (or I'll keep bugging you about them).",
-      events.filter(function (event) {
+    var events_after_autos = events.filter(function (event) {
         const last_nagged = properties[nagPropertyKey(event)];
         const recently_nagged = last_nagged && (last_nagged > three_days_ago);
         const marked_free = (event.transparency == 'transparent');
         const not_tagged_busy = (!event.description || !event.description.match(/\[busy\]/));
         return !marked_free && not_tagged_busy && !recently_nagged;
+      }).filter(function(event) {
+        // Auto-processible events
+        if (event.description && event.description.match(/tram home$|tram to|practice$|climbing$/) && !event.description.match(/matt|fallabria/i)) {
+          try {
+            makeEventBe({ action: ACTION_MAKE_FREE, calendarId: calendarId }, event);
+            return false;
+          } catch(_) {
+            return true;
+          }
+        } else {
+          return true;
+        }
       })
-    ).map(function (event) {  // update last nagged timestamps
+    var email_message = "<p>The following calendar events are blocking your availability, but don't contain " +
+      '<code>[busy]</code> in their descriptions. Either make them <em>Free</em> or add ' +
+      "<code>[busy]</code> to their descriptions (or I'll keep bugging you about them)."
+    sendEmailListingEvents(email_message, events_after_autos).
+    map(function (event) {  // update last nagged timestamps
       scriptProperties.setProperty(nagPropertyKey(event), now);
       return event;
     });

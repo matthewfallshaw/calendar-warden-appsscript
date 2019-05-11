@@ -5,7 +5,7 @@
     <?!= include('Stylesheet'); ?>
   </head>
   <body>
-    <?!= message ? message : '' ?>
-    <? if (detail) { ?><pre><code><?= detail ?></code></pre><? } ?>
+    <div id="message" class="<?!= status ?>"><?!= message ? message : '' ?></div>
+    <? if (detail) { ?><hr><pre id="detail"><code><?= detail ?></code></pre><? } ?>
   </body>
 </html>
