@@ -10,42 +10,80 @@ var NAG_PROPERTY_PREFIX = 'NAG:';
 /**
  * Web App server. Handle GET requests (from links in generated emails).
  */
-function doGet(e) {  // Should really be a POST, but that's hard to do from an email
-  var params = e.parameter;
-  var response = HtmlService.createTemplateFromFile('Index');
+function doGet(request) {  // Should really be a POST, but that's hard to do from an email
+  var params = request.parameter;
 
-  if (!params.calendarId || !params.eventId || !params.action) {
-    response.status = 'error';
-    response.message = '<p>Missing parameters:</p>\n<ol>\n';
-    if (!params.calendarId) { response.message += '<li>Missing calendarId.</li>\n' }
-    if (!params.eventId)    { response.message += '<li>Missing eventId.</li>\n' }
-    if (!params.action)     { response.message += '<li>Missing action.</li>\n' }
-    response.message += '</ol>'
-    response.detail = json_out(e);
-    return response.evaluate();
-  }
+  if (!validParams(params)) { return invalidParamsResponse(request); }
 
   var event = Calendar.Events.get(params.calendarId, params.eventId);
-  if (!event) {
-    response.status = 'error';
-    response.message = '<p>Event not found.</p>\n';
-    response.detail = json_out(e);
-    return response.evaluate();
-  };
+  if (!event) { return eventNotFoundResponse(request); }
 
   try {
-    makeEventBe({ action: e.parameter.action, calendarId: params.calendarId }, event);
-    response.status = 'success';
-    response.message = '<p><a target="_parent" href="' +  event.htmlLink + '">Event</a> made <em>' +
-      e.parameter.action.replace(/^make/, '') + '</em>.</p>\n';
-    response.detail = json_out(event);
-    return response.evaluate();
+    var report = makeEventBe({ action: params.action, calendarId: params.calendarId }, event);
+    return successResponse(report, request);
   } catch(err) {
-    response.status = 'error';
-    response.message = '<p>' + err + '</p>\n';
-    response.detail = json_out({ request: e, event: event, error: err });
-    return response.evaluate();
+    return errorResponse(request, event, err);
   }  
+}
+
+
+function validParams(params) {
+  return (params.calendarId && params.eventId && params.action);
+}
+
+function invalidParamsResponse(request) {
+  var template = standardTemplate();
+  template.status = 'error';
+  template.message = '<p>Missing parameters:</p>\n<ol>\n';
+  if (!params.calendarId) { template.message += '<li>Missing calendarId.</li>\n' }
+  if (!params.eventId)    { template.message += '<li>Missing eventId.</li>\n' }
+  if (!params.action)     { template.message += '<li>Missing action.</li>\n' }
+  template.message += '</ol>';
+  template.detail = json_out(request);
+  return standardResponse(template);
+}
+
+function eventNotFoundResponse(request) {
+  var template = standardTemplate();
+  template.status = 'error';
+  template.message = '<p>Event not found.</p>\n';
+  template.detail = json_out(request);
+  return standardResponse(template);
+}
+
+function errorResponse(request, event, err) {
+  var template = standardTemplate();
+  template.status = 'error';
+  template.message = '<p>' + err + '</p>\n';
+  template.detail = json_out({ request: request, event: event, error: err });
+  return standardResponse(template);
+}
+
+function successResponse(report, request) {
+  var template = standardTemplate();
+  var event = report.event;
+  var message = report.message;
+  template.status = 'success';
+  template.message = '<p><a target="_parent" href="' +  event.htmlLink + '">Event</a> ' +
+                     message + '.</p>\n';
+  template.detail = json_out(event);
+  return standardResponse(template);
+}
+
+function standardTemplate() {
+  return HtmlService.createTemplateFromFile('Index');
+}
+
+function standardResponse(template) {
+  var output = template.evaluate();
+  output.setTitle('Calendar Warden');
+  output.addMetaTag('viewport', 'width=device-width, initial-scale=1');
+  output.setFaviconUrl(googleCalendarFavicon());
+  return output;
+}
+
+function googleCalendarFavicon() {
+  return 'https://calendar.google.com/googlecalendar/images/favicon_v2014_' + (new Date).getDate() + '.ico';
 }
 
 
@@ -131,22 +169,61 @@ function removeAlertsFromBlockEvents(events) {
  * (Returns the event for chaining.)
  */
 function makeEventBe(action, event) {
+  var report;
   switch (action.action) {
     case ACTION_MAKE_FREE:
-      event.transparency = 'transparent';
-      if (event.description) { event.description = event.description.replace(/\n?\[busy\]/,'') }
-      event = Calendar.Events.patch(event, action.calendarId, event.id);
+      report = makeEventBeFree(action, event);
       break;
     case ACTION_MAKE_BUSY:
-      event.transparency = 'opaque';
-      event.description = event.description ? event.description + '\n[busy]' : '[busy]';
-      event = Calendar.Events.patch(event, action.calendarId, event.id);
+      report = makeEventBeBusy(action, event);
       break;
     default:
-      throw 'Unrecognised action `' + action.action + '`; I know how to `' + ACTION_MAKE_FREE + '` and `' + ACTION_MAKE_BUSY + '`. ' + json_out(action) + ' | ' + event;
+      throw 'Unrecognised action `' + action.action + '`; I know how to `' + ACTION_MAKE_FREE + '` and `' + ACTION_MAKE_BUSY + '`. ' +
+            json_out(action) + ' | ' + event;
   }
 
-  return event;
+  return report;
+}
+
+function makeEventBeFree(action, event) {
+  var message;
+
+  if (event.transparency == 'transparent') {
+    message = 'already <em>free</em>';
+  } else {
+    event.transparency = 'transparent';
+    message = 'made <em>free</em>';
+  }
+  if (event.description) {
+    if (event.description.match(/\[busy\]/)) {
+      event.description = event.description.replace(/\n?\[busy\]/,'');
+      message = message + ' (<code>[busy]</code> removed from description)';
+    }
+  }
+
+  event = Calendar.Events.patch(event, action.calendarId, event.id);
+
+  return { event: event, message: message};
+}
+
+function makeEventBeBusy(action, event) {
+  var message;
+
+  if (event.transparency == 'opaque') {
+    message = 'already <em>busy</em>';
+  } else {
+    event.transparency = 'opaque';
+    message = 'made <em>busy</em>';
+  }
+  if (event.description && event.description.match(/\[busy\]/)) {
+    message = message + ' (<code>[busy]</code> already present in description)';
+  } else {
+    event.description = event.description ? event.description + '\n[busy]' : '[busy]';
+  }
+
+  event = Calendar.Events.patch(event, action.calendarId, event.id);
+
+  return { event: event, message: message};
 }
 
 
