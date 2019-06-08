@@ -1,17 +1,20 @@
 'use strict';
 
-var DEFAULT_CALENDAR = PropertiesService.getScriptProperties().getProperty('defaultCalendar');
-var SELF_LINK = PropertiesService.getScriptProperties().getProperty('selfLink');
+// `const` raises redeclaration error
 var ACTION_MAKE_FREE = 'makefree';
 var ACTION_MAKE_BUSY = 'makebusy';
-var NAG_PROPERTY_PREFIX = 'NAG:';
+var NAG_PROPERTY_PREFIX = '_NAG:';
+var TAG_MAKE_FREE = 'free-calendar-event';
+var TAG_MAKE_BUSY = 'busy-calendar-event';
+var TAG_MADE_FREE = 'calendar-event-made-free';
+var TAG_MADE_BUSY = 'calendar-event-made-busy';
 
 
 /**
  * Web App server. Handle GET requests (from links in generated emails).
  */
 function doGet(request) {  // Should really be a POST, but that's hard to do from an email
-  var params = request.parameter;
+  const params = request.parameter;
 
   if (!validParams(params)) { return invalidParamsResponse(request); }
 
@@ -19,7 +22,7 @@ function doGet(request) {  // Should really be a POST, but that's hard to do fro
   if (!event) { return eventNotFoundResponse(request); }
 
   try {
-    var report = makeEventBe({ action: params.action, calendarId: params.calendarId }, event);
+    const report = makeEventBe({ action: params.action, calendarId: params.calendarId }, event);
     return successResponse(report, request);
   } catch(err) {
     return errorResponse(request, event, err);
@@ -61,8 +64,8 @@ function errorResponse(request, event, err) {
 
 function successResponse(report, request) {
   var template = standardTemplate();
-  var event = report.event;
-  var message = report.message;
+  const event = report.event;
+  const message = report.message;
   template.status = 'success';
   template.message = '<p><a target="_parent" href="' +  event.htmlLink + '">Event</a> ' +
                      message + '.</p>\n';
@@ -75,7 +78,7 @@ function standardTemplate() {
 }
 
 function standardResponse(template) {
-  var output = template.evaluate();
+  const output = template.evaluate();
   output.setTitle('Calendar Warden');
   output.addMetaTag('viewport', 'width=device-width, initial-scale=1');
   output.setFaviconUrl(googleCalendarFavicon());
@@ -89,6 +92,7 @@ function googleCalendarFavicon() {
 
 /**
  * The next 50 upcoming events in a calendar.
+ * ([Event])
  */
 function upcomingEvents(calendarId) {
   const now = new Date();
@@ -99,7 +103,6 @@ function upcomingEvents(calendarId) {
     maxResults: 50
   });
   if (response.items) {
-    response.items.calendarId = calendarId;
     return response.items.map(function(event) { event.calendarId = calendarId; return event });
   } else {
     return [];
@@ -107,16 +110,37 @@ function upcomingEvents(calendarId) {
 }
 
 /**
- * Formatted summary of a calendar event.
+ * Email subject header
  * (String)
  */
-function eventSummary(event) {
-  return '  <li><a href="' +  event.htmlLink + '">' + event.summary + '</a><br />(' +
-    (event.start.date || event.start.dateTime) +
-     ')' +
-     ' [<a href="' + eventActionURL(ACTION_MAKE_FREE, event) + '">make Free</a>]' +
-     ' [<a href="' + eventActionURL(ACTION_MAKE_BUSY, event) + '">make Busy</a>]' +
-     '</li>\n';
+function eventsEmailSubject(events) {
+  const subject = events.map(function(event) {
+    const summary = event.summary && event.summary.match(/^.{0,25}\w{0,15}/)[0] || 'Unnamed event';
+    if (event.summary.length > summary.length) {
+      return summary + '…';
+    } else {
+      return summary;
+    }
+  }).join(' | ');
+  return subject;
+}
+
+/**
+ * Email body text
+ * (String)
+ */
+function eventsEmailBody(intro_text, events) {
+  return intro_text +
+    '\n\n<ul>\n' +
+    events.reduce(function(acc, event) {
+      return acc + '  <li>' + eventSummary(event) + '</li>\n';
+    }, '') +
+    '</ul>';
+}
+
+function eventsEmailThreadId(events) {
+  return md5(events.reduce(function(acc, e, ii) { return ii === 0 ? e.id : acc + '|' + e.id }, '')) +
+    '@' + Session.getActiveUser().getEmail().replace(/@.*/,'');
 }
 
 /**
@@ -125,21 +149,16 @@ function eventSummary(event) {
  */
 function sendEmailListingEvents(intro_text, events) {
   if (events && (events.length > 0)) {
-    const body = intro_text +
-      '\n\n<ul>\n' +
-      events.reduce(function(acc, event) {
-        return acc + eventSummary(event);
-      }, '') +
-      '</ul>';
-    const thread_id =
-        md5(events.reduce(function(acc, e, ii) {return ii === 0 ? e.id : acc + '|' + e.id}, '')) +
-          '@' + Session.getActiveUser().getEmail().replace(/@.*/,'');
+    const body = eventsEmailBody(intro_text, events);
+    const subject = eventsEmailSubject(events);
+    const thread_id = eventsEmailThreadId(events);
+    const email_address = Session.getActiveUser().getEmail();
     sendEmail(
       body,
       {
-        To: Session.getActiveUser().getEmail(),
-        From: Session.getActiveUser().getEmail(),
-        Subject: 'Calendar blocking entries',
+        To: email_address,
+        From: email_address,
+        Subject: 'CalendarWarden: ' + subject,
         'Content-Type': 'text/html; charset=UTF-8',
         'In-Reply-To': '<' + thread_id + '>',
       }
@@ -178,8 +197,9 @@ function makeEventBe(action, event) {
       report = makeEventBeBusy(action, event);
       break;
     default:
-      throw 'Unrecognised action `' + action.action + '`; I know how to `' + ACTION_MAKE_FREE + '` and `' + ACTION_MAKE_BUSY + '`. ' +
-            json_out(action) + ' | ' + event;
+      throw ('Unrecognised action `' + action.action +
+             '`; I know how to `' + ACTION_MAKE_FREE + '` and `' + ACTION_MAKE_BUSY + '`. ' +
+             json_out(action) + ' | ' + event);
   }
 
   return report;
@@ -227,34 +247,37 @@ function makeEventBeBusy(action, event) {
 }
 
 
+function is_auto_processible_event(event) {
+  return (event.description &&
+          event.description.match(/tram home$|tram to|practice$|climbing$/) &&
+          !event.description.match(/matt|fallabria/i))
+}
+
+function is_block_event(event) {
+  return event.summary && event.summary.match(/^block$/i);
+}
+
 /**
  * Check calendar.
  */
 function checkCalendar(calendarId) {
   const now = new Date().getTime()
   const three_days_ago = now - 1000 * 60 * 60 * 24 * 3;
-  var scriptProperties = PropertiesService.getScriptProperties()
-  var properties = scriptProperties.getProperties();
 
   const events = upcomingEvents(calendarId);
 
-  removeAlertsFromBlockEvents(
-    events.filter(function(event) {
-      return event.summary && event.summary.match(/^block$/i);
-    })
-  );
+  removeAlertsFromBlockEvents(events.filter(is_block_event));
 
   // Email list of noncomplying & blocking events in default calendar.
-  if (calendarId === DEFAULT_CALENDAR) {
-    var events_after_autos = events.filter(function (event) {
-        const last_nagged = properties[nagPropertyKey(event)];
+  if (calendarId === getProperty('defaultCalendar')) {
+    const events_after_autos = events.filter(function (event) {
+        const last_nagged = getProperty(nagPropertyKey(event), false);
         const recently_nagged = last_nagged && (last_nagged > three_days_ago);
         const marked_free = (event.transparency == 'transparent');
         const not_tagged_busy = (!event.description || !event.description.match(/\[busy\]/));
         return !marked_free && not_tagged_busy && !recently_nagged;
       }).filter(function(event) {
-        // Auto-processible events
-        if (event.description && event.description.match(/tram home$|tram to|practice$|climbing$/) && !event.description.match(/matt|fallabria/i)) {
+        if (is_auto_processible_event(event)) {
           try {
             makeEventBe({ action: ACTION_MAKE_FREE, calendarId: calendarId }, event);
             return false;
@@ -264,15 +287,15 @@ function checkCalendar(calendarId) {
         } else {
           return true;
         }
-      })
-    var email_message = "<p>The following calendar events are blocking your availability, but don't contain " +
+      });
+    const email_message = "<p>The following calendar events are blocking your availability, but don't contain " +
       '<code>[busy]</code> in their descriptions. Either make them <em>Free</em> or add ' +
-      "<code>[busy]</code> to their descriptions (or I'll keep bugging you about them)."
-    sendEmailListingEvents(email_message, events_after_autos).
-    map(function (event) {  // update last nagged timestamps
-      scriptProperties.setProperty(nagPropertyKey(event), now);
-      return event;
-    });
+      "<code>[busy]</code> to their descriptions (or I'll keep bugging you about them).";
+    sendEmailListingEvents(email_message, events_after_autos)
+      .map(function (event) {  // update last nagged timestamps
+        PropertiesService.getScriptProperties().setProperty(nagPropertyKey(event), now);
+        return event;
+      });
   }
 }
 
@@ -280,8 +303,7 @@ function checkCalendar(calendarId) {
  * Check calendars.
  */
 function checkCalendars() {
-  if (!DEFAULT_CALENDAR) { throw missingPropertyErrorMessage('defaultCalendar') }
-  checkCalendar(DEFAULT_CALENDAR);
+  checkCalendar(getProperty('defaultCalendar'));
 }
 
 /**
@@ -293,6 +315,48 @@ function checkCalendarFromChangeEvent(data) {
   checkCalendar(calendarId);
 }
 
+/**
+ * Check email account for flagged events.
+ */
+function checkEmailAccount(account) {
+  [TAG_MAKE_FREE, TAG_MAKE_BUSY].map(function(tag) {
+    // Search for events with TAG_MAKE_FREE or TAG_MAKE_BUSY
+    var label = GmailApp.getUserLabelByName(tag);
+    if (!label) { label = GmailApp.createLabel(tag); }
+    var threads = label.getThreads();
+    if (!threads || threads.length == 0) { return false; }
+    var tag_done = (tag == TAG_MAKE_FREE) ? TAG_MADE_FREE : TAG_MADE_BUSY;
+    var label_done = GmailApp.getUserLabelByName(tag_done) || GmailApp.createLabel(tag_done);
+    // for all threads
+    threads.map(function(thread) {
+      thread.getMessages().map(function(message) {  // assume threads have >0 messages
+        var re = /data-calendar-id="([^"]+)" +data-event-id="([^"]+)"/g;
+        var body = message.getBody();
+        // find events
+        var matches = re.exec(body);
+        while (matches !== null) {
+          var calendar_id = matches[1];
+          var event_id = matches[2];
+          var event = Calendar.Events.get(calendar_id, event_id);
+          // make free or busy and replace with TAG_MADE_FREE|BUSY label
+          if (tag == TAG_MAKE_FREE) {
+            makeEventBe({ action: ACTION_MAKE_FREE, calendarId: calendar_id }, event);
+          } else {
+            makeEventBe({ action: ACTION_MAKE_BUSY, calendarId: calendar_id }, event);
+          }
+          matches = re.exec(body);
+        };
+      })
+      label_done.addToThread(thread);
+      label.removeFromThread(thread);
+    });
+  });
+}
+
+function checkEmail() {
+  checkEmailAccount(Session.getActiveUser().getEmail());
+}
+
 
 /**
  * Clear event nag timestamp properties.
@@ -300,12 +364,13 @@ function checkCalendarFromChangeEvent(data) {
  */
 function clearOldNagTimestamps() {
   const three_days_ago = new Date().getTime() - 1000 * 60 * 60 * 24 * 3;
-  const scriptProperties = PropertiesService.getScriptProperties();
-  const properties = scriptProperties.getProperties();
+  const properties = PropertiesService.getScriptProperties().getProperties();
   Object.keys(properties)
     .filter(function(key) { return key.match(new RegExp('^' + NAG_PROPERTY_PREFIX)) })
     .map(function (key) {
-      if (!isNaN(Number(properties[key])) && (Number(properties[key])) < three_days_ago) { scriptProperties.deleteProperty(key) }
+      if (!isNaN(Number(properties[key])) &&(Number(properties[key])) < three_days_ago) {
+        scriptProperties.deleteProperty(key);
+      }
     });
 }
 
@@ -323,13 +388,35 @@ function json_out(json) {
 }
 
 function include(filename) {
-  return HtmlService.createHtmlOutputFromFile(filename)
-      .getContent();
+  return HtmlService.createHtmlOutputFromFile(filename).getContent();
 }
 
 function eventActionURL(action, event) {
-  if (!SELF_LINK) { throw missingPropertyErrorMessage('selfLink') }
-  return SELF_LINK + '?calendarId=' + event.calendarId + '&eventId=' + event.id + '&action=' + action
+  return getProperty('selfLink') + '?calendarId=' + event.calendarId + '&eventId=' + event.id + '&action=' + action
+}
+
+function eventSummary(event) {
+  return eventLink(event) + '<br />' +
+    '(' + (event.start.date || event.start.dateTime) + ') ' +
+    '[' + eventActionLink(ACTION_MAKE_FREE, event) + '] [' + eventActionLink(ACTION_MAKE_BUSY, event) + ']';
+}
+
+function eventLink(event) {
+  assert(event, "No Event");
+  assert(event.htmlLink, "No event.htmlLink", event);
+  assert(event.summary, "No event.summary", event);
+  return '<a ' +
+      'href="' +  event.htmlLink + '" ' +
+      'data-calendar-id="' + event.calendarId + '" data-event-id="' + event.id + '"' +
+    '>' + 
+      event.summary +
+    '</a>';
+}
+
+function eventActionLink(action, event) {
+  return '<a href="' + eventActionURL(action, event) + '">' +
+      'make <em>' + (action == ACTION_MAKE_FREE ? 'Free' : 'Busy') + '</em>' +
+    '</a>';
 }
 
 function md5(str) {
@@ -351,15 +438,26 @@ function sendEmail(body, headers) {
   Gmail.Users.Messages.send(msg, 'me');
 }
 
+function getProperty(property_key, error_if_missing) {
+  const property = PropertiesService.getScriptProperties().getProperty(property_key);
+  if (error_if_missing && !property) {
+    throw missingPropertyErrorMessage(property);
+  } else {
+    return property;
+  }
+}
+
 function nagPropertyKey(event) {
   return NAG_PROPERTY_PREFIX + event.id.toString();
 }
 
+function assert() { if (!arguments[0]) { throw 'Error: ' + JSON.stringify(arguments); } }
 
 
-function test() {
+
+function _test() {
   const scriptProperties = PropertiesService.getScriptProperties();
   const properties = scriptProperties.getProperties();
   
-  Logger.log(Session.getActiveUser().getEmail());
+  Logger.log(properties);
 }
