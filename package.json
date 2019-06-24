@@ -1,0 +1,30 @@
+{
+  "name": "calendar-warden-appsscript",
+  "version": "0.1.0",
+  "description": "A Google Apps Script that monitors a shared calendar, making it easier to manage",
+  "main": "Code.ts",
+  "types": "Code.d.ts",
+  "dependencies": {
+    "typescript": "^3.5.1"
+  },
+  "devDependencies": {
+    "@types/google-apps-script": "0.0.53"
+  },
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/matthewfallshaw/calendar-warden-appsscript.git"
+  },
+  "keywords": [
+    "Google",
+    "Calendar"
+  ],
+  "author": "Matthew Fallshaw",
+  "license": "MIT",
+  "bugs": {
+    "url": "https://github.com/matthewfallshaw/calendar-warden-appsscript/issues"
+  },
+  "homepage": "https://github.com/matthewfallshaw/calendar-warden-appsscript#readme"
+}

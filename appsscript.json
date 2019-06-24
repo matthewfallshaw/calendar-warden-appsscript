@@ -16,6 +16,7 @@
     "executeAs": "USER_DEPLOYING"
   },
   "exceptionLogging": "STACKDRIVER",
+  "executionApi": {"access": "ANYONE"},
   "oauthScopes": [
     "https://www.googleapis.com/auth/calendar.events",
     "https://www.googleapis.com/auth/gmail.labels",
