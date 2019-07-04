@@ -6,35 +6,35 @@ const TAG_MAKE_BUSY = 'busy-calendar-event';
 const TAG_MADE_FREE = 'calendar-event-made-free';
 const TAG_MADE_BUSY = 'calendar-event-made-busy';
 
-interface IRequest {
+interface Request {
   queryString: string;
   // parameter: {[key: string]: string; },
-  parameter: IRequestParameters;
+  parameter: RequestParameters;
   contextPath: string;
   contentLength: number;
 }
-interface IRequestParameters {
+interface RequestParameters {
   calendarId: string;
   eventId: string;
   action: string;
 }
-interface IResponseTemplate extends GoogleAppsScript.HTML.HtmlTemplate {
+interface ResponseTemplate extends GoogleAppsScript.HTML.HtmlTemplate {
   status: string;
   message: string;
   detail: string;
 }
 
-interface IReport {
+interface Report {
   event: EventWithCalendarId;
   message: string;
 }
 
 // TODO: This avoids implicit any warnings when working with PropertiesService, but ugly much?
-interface IProperties {
+interface Properties {
   [key: string]: string;
 }
 
-interface IEventWithCalendarId extends GoogleAppsScript.Calendar.Schema.Event {
+interface EventWithCalendarId extends GoogleAppsScript.Calendar.Schema.Event {
   calendarId: string;
   id: string;  // @types say this is optional; nuh-ah!
   // TODO: why are the following properties not auto pulled from GAS.C.S.Event?
@@ -46,24 +46,41 @@ interface IEventWithCalendarId extends GoogleAppsScript.Calendar.Schema.Event {
   transparency?: string;
 }
 
-class EventWithCalendarId implements IEventWithCalendarId {
-  // TODO: is there an elegant way to avoid the duplication with the intnerface?
-  calendarId: string;
-  id: string;
-  description?: string;
-  htmlLink?: string;
-  reminders?: GoogleAppsScript.Calendar.Schema.EventReminders;
-  start?: GoogleAppsScript.Calendar.Schema.EventDateTime;
-  summary?: string;
-  transparency?: string;
+const workaroundAssign = function(has) {
+  function copy(target: any, source: any): any {
+    for (const key in source) {
+      if (has.call(source, key)) {
+        target[key] = source[key];
+      }
+    }
+  }
+  function assign(target: any, ...source: any): any {
+    for (const argument of source) {
+      copy(target, argument);
+    }
+    return target;
+  }
+  return assign;
+}({}.hasOwnProperty);
 
-  constructor(calendarId: string, event: GoogleAppsScript.Calendar.Schema.Event) {
+class EventWithCalendarId implements EventWithCalendarId {
+  // TODO: is there an elegant way to avoid the duplication with the intnerface?
+  public calendarId: string;
+  public id: string;
+  public description?: string;
+  public htmlLink?: string;
+  public reminders?: GoogleAppsScript.Calendar.Schema.EventReminders;
+  public start?: GoogleAppsScript.Calendar.Schema.EventDateTime;
+  public summary?: string;
+  public transparency?: string;
+
+  public constructor(calendarId: string, event: GoogleAppsScript.Calendar.Schema.Event) {
     workaroundAssign(this, event);  // typescript happily emits Object.assign, which fails on GAS
     this.calendarId = calendarId;
     // TODO: make an `assert_type` wrapper for this pattern
     if (typeof event.id === 'string') {
-      this.id = event.id; // TODO: already assigned by workaroundAssign, but this to cause typescript
-                          // to see an assignment
+      // TODO: already assigned by workaroundAssign, but this to cause typescript to see an assignment
+      this.id = event.id;
     } else {
       throw new Error('Error: Event has no id. ' + JSON.stringify(event));
     }
@@ -72,73 +89,16 @@ class EventWithCalendarId implements IEventWithCalendarId {
 
 type Action = 'makefree' | 'makebusy';
 
-/**
- * Web App server. Handle GET requests (from links in generated emails).
- *
- * @param {IRequest} request
- * @returns {GoogleAppsScript.HTML.HtmlOutput}
- */
-function doGet(request: IRequest): GoogleAppsScript.HTML.HtmlOutput {
-  // Should really be a POST, but that's hard to do from an email
-  const params: IRequestParameters = request.parameter;
-
-  if (!validParams(params)) {return responseInvalidParams(request); }
-
-  const event = getCalendarEvent(params.calendarId, params.eventId);
-  if (!event) {return responseEventNotFound(request); }
-
-  try {
-    const report = makeEventBe(params.action as Action, event);
-    return responseSuccess(report);
-  } catch (err) {
-    return responseError(request, event, err);
-  }
-}
-
-function validParams(params: IRequestParameters): boolean  {
+function validParams(params: RequestParameters): boolean  {
   return (params.calendarId && params.eventId && params.action && true || false);
 }
 
-function responseInvalidParams(request: IRequest): GoogleAppsScript.HTML.HtmlOutput  {
-  let message = '<p>Missing parameters:</p>\n<ol>\n';
-  if (!request.parameter.calendarId) {message += '<li>Missing calendarId.</li>\n'; }
-  if (!request.parameter.eventId)    {message += '<li>Missing eventId.</li>\n'; }
-  if (!request.parameter.action)     {message += '<li>Missing action.</li>\n'; }
-  message += '</ol>';
-  const template = standardTemplate() as IResponseTemplate;
-  template.status = 'error';
-  template.message = message;
-  template.detail = json_out(request);
-  return responseStandard(template);
+function jsonOut(json: {}): string {
+  return JSON.stringify(json, null, 2);
 }
 
-function responseEventNotFound(request: IRequest): GoogleAppsScript.HTML.HtmlOutput  {
-  const template = standardTemplate() as IResponseTemplate;
-  template.status = 'error';
-  template.message = '<p>Event not found.</p>\n';
-  template.detail = json_out(request);
-  return responseStandard(template);
-}
-
-function responseError(request: IRequest,
-                       event: EventWithCalendarId,
-                       err: Error): GoogleAppsScript.HTML.HtmlOutput {
-  const template = standardTemplate() as IResponseTemplate;
-  template.status = 'error';
-  template.message = '<p>' + err + '</p>\n';
-  template.detail = json_out({request, event, error: err});
-  return responseStandard(template);
-}
-
-function responseSuccess(report: IReport): GoogleAppsScript.HTML.HtmlOutput  {
-  const event = report.event;
-  const message = '<p><a target="_parent" href="' + event.htmlLink + '">Event</a> ' +
-    report.message + '.</p>\n';
-  const template = standardTemplate() as IResponseTemplate;
-  template.status = 'success';
-  template.message = message;
-  template.detail = json_out(event);
-  return responseStandard(template);
+function googleCalendarFavicon(): string  {
+  return 'https://calendar.google.com/googlecalendar/images/favicon_v2014_' + (new Date()).getDate() + '.ico';
 }
 
 function standardTemplate(): GoogleAppsScript.HTML.HtmlTemplate  {
@@ -154,8 +114,190 @@ function responseStandard(template: GoogleAppsScript.HTML.HtmlTemplate): GoogleA
   return output;
 }
 
-function googleCalendarFavicon(): string  {
-  return 'https://calendar.google.com/googlecalendar/images/favicon_v2014_' + (new Date()).getDate() + '.ico';
+function responseInvalidParams(request: Request): GoogleAppsScript.HTML.HtmlOutput  {
+  let message = '<p>Missing parameters:</p>\n<ol>\n';
+  if (!request.parameter.calendarId) {message += '<li>Missing calendarId.</li>\n'; }
+  if (!request.parameter.eventId)    {message += '<li>Missing eventId.</li>\n'; }
+  if (!request.parameter.action)     {message += '<li>Missing action.</li>\n'; }
+  message += '</ol>';
+  const template = standardTemplate() as ResponseTemplate;
+  template.status = 'error';
+  template.message = message;
+  template.detail = jsonOut(request);
+  return responseStandard(template);
+}
+
+function responseEventNotFound(request: Request): GoogleAppsScript.HTML.HtmlOutput  {
+  const template = standardTemplate() as ResponseTemplate;
+  template.status = 'error';
+  template.message = '<p>Event not found.</p>\n';
+  template.detail = jsonOut(request);
+  return responseStandard(template);
+}
+
+/*eslint @typescript-eslint/indent: ["error", 2, {"FunctionDeclaration": {"parameters": "first"}}]*/
+function responseError(request: Request,
+                       event: EventWithCalendarId,
+                       err: Error): GoogleAppsScript.HTML.HtmlOutput {
+  const template = standardTemplate() as ResponseTemplate;
+  template.status = 'error';
+  template.message = '<p>' + err + '</p>\n';
+  template.detail = jsonOut({request, event, error: err});
+  return responseStandard(template);
+}
+
+function responseSuccess(report: Report): GoogleAppsScript.HTML.HtmlOutput  {
+  const event = report.event;
+  const message = '<p><a target="_parent" href="' + event.htmlLink + '">Event</a> ' +
+    report.message + '.</p>\n';
+  const template = standardTemplate() as ResponseTemplate;
+  template.status = 'success';
+  template.message = message;
+  template.detail = jsonOut(event);
+  return responseStandard(template);
+}
+
+function withCalendarId(calendarId: string,
+                        event: GoogleAppsScript.Calendar.Schema.Event | undefined): EventWithCalendarId  {
+  if (event) {
+    return new EventWithCalendarId(calendarId, event);
+  } else {
+    throw new Error('Error: Missing Event!');
+  }
+}
+
+function withCalendarIds(calendarId: string, events: GoogleAppsScript.Calendar.Schema.Event[]): EventWithCalendarId[]  {
+  return events.map((event) => new EventWithCalendarId(calendarId, event));
+}
+
+function getCalendarEvent(calendarId: string, eventId: string): EventWithCalendarId  {
+  const es = Calendar.Events as GoogleAppsScript.Calendar.Collection.EventsCollection;
+  const gEvent = es.get(calendarId, eventId);
+  if (typeof gEvent.id === 'string') {
+    return withCalendarId(calendarId, gEvent);
+  } else {
+    throw new Error('Error: Event with no id!' + JSON.stringify(gEvent));
+  }
+}
+
+function listCalendarEvents(calendarId: string): EventWithCalendarId[]  {
+  const es = Calendar.Events as GoogleAppsScript.Calendar.Collection.EventsCollection;
+  const gEvents = es.list(calendarId, {
+    maxResults: 50,
+    orderBy: 'startTime',
+    singleEvents: true,
+    timeMin: (new Date()).toISOString(),
+  });
+  if (gEvents.items) {
+    return withCalendarIds(calendarId, gEvents.items);
+  } else {
+    return [];
+  }
+}
+
+function patchCalendarEvent(event: EventWithCalendarId): EventWithCalendarId  {
+  const es = Calendar.Events as GoogleAppsScript.Calendar.Collection.EventsCollection;
+  return withCalendarId(event.calendarId, es.patch(event, event.calendarId, event.id as string));
+}
+
+/**
+ * Change state of event.
+ *
+ * @param {Action} action
+ * @param {EventWithCalendarId} event
+ * @returns {Report}
+ */
+function makeEventBe(action: Action, event: EventWithCalendarId): Report  {
+  let report: Report;
+  switch (action) {
+  case ACTION_MAKE_FREE:
+    report = makeEventBeFree(event);
+    break;
+  case ACTION_MAKE_BUSY:
+    report = makeEventBeBusy(event);
+    break;
+  default:
+    throw new Error(('Unrecognised action `' + action +
+        '`; I know how to `' + ACTION_MAKE_FREE + '` and `' + ACTION_MAKE_BUSY + '`. ' +
+        jsonOut(action) + ' | ' + event));
+  }
+
+  return report;
+}
+
+function makeEventBeFree(event: EventWithCalendarId): Report  {
+  let message: string;
+  let dirty = false;
+
+  if (event.transparency === 'transparent') {
+    message = 'already <em>free</em>';
+  } else {
+    dirty = true;
+    event.transparency = 'transparent';
+    message = 'made <em>free</em>';
+  }
+  if (event.description) {
+    if (event.description.match(/\[busy\]/)) {
+      dirty = true;
+      event.description = event.description.replace(/\n?\[busy\]/, '');
+      message = message + ' (<code>[busy]</code> removed from description)';
+    }
+  }
+
+  const patchedEvent: EventWithCalendarId = dirty ? patchCalendarEvent(event) : event;
+
+  const report: Report = {event: patchedEvent, message};
+
+  return report;
+}
+
+function makeEventBeBusy(event: EventWithCalendarId): Report  {
+  let message: string;
+  let dirty = false;
+
+  if (event.transparency === 'opaque') {
+    message = 'already <em>busy</em>';
+  } else {
+    dirty = true;
+    event.transparency = 'opaque';
+    message = 'made <em>busy</em>';
+  }
+  if (event.description && event.description.match(/\[busy\]/)) {
+    message += ' (<code>[busy]</code> already present in description)';
+  } else {
+    dirty = true;
+    event.description = event.description ? event.description + '\n[busy]' : '[busy]';
+  }
+
+  const patchedEvent: EventWithCalendarId = dirty ? patchCalendarEvent(event) : event;
+  const report: Report = {event: patchedEvent, message};
+
+  return report;
+}
+
+
+/**
+ * Web App server. Handle GET requests (from links in generated emails).
+ *
+ * @param {Request} request
+ * @returns {GoogleAppsScript.HTML.HtmlOutput}
+ */
+// eslint-disable-next-line @typescript-eslint/no-unused-vars
+function doGet(request: Request): GoogleAppsScript.HTML.HtmlOutput {
+  // Should really be a POST, but that's hard to do from an email
+  const params: RequestParameters = request.parameter;
+
+  if (!validParams(params)) {return responseInvalidParams(request); }
+
+  const event = getCalendarEvent(params.calendarId, params.eventId);
+  if (!event) {return responseEventNotFound(request); }
+
+  try {
+    const report = makeEventBe(params.action as Action, event);
+    return responseSuccess(report);
+  } catch (err) {
+    return responseError(request, event, err);
+  }
 }
 
 /**
@@ -241,81 +383,6 @@ function removeAlerts(events: EventWithCalendarId[]): EventWithCalendarId[]  {
   });
 }
 
-/**
- * Change state of event.
- *
- * @param {Action} action
- * @param {EventWithCalendarId} event
- * @returns {IReport}
- */
-function makeEventBe(action: Action, event: EventWithCalendarId): IReport  {
-  let report: IReport;
-  switch (action) {
-    case ACTION_MAKE_FREE:
-      report = makeEventBeFree(event);
-      break;
-    case ACTION_MAKE_BUSY:
-      report = makeEventBeBusy(event);
-      break;
-    default:
-      throw new Error(('Unrecognised action `' + action +
-        '`; I know how to `' + ACTION_MAKE_FREE + '` and `' + ACTION_MAKE_BUSY + '`. ' +
-        json_out(action) + ' | ' + event));
-  }
-
-  return report;
-}
-
-function makeEventBeFree(event: EventWithCalendarId): IReport  {
-  let message: string;
-  let dirty = false;
-
-  if (event.transparency === 'transparent') {
-    message = 'already <em>free</em>';
-  } else {
-    dirty = true;
-    event.transparency = 'transparent';
-    message = 'made <em>free</em>';
-  }
-  if (event.description) {
-    if (event.description.match(/\[busy\]/)) {
-      dirty = true;
-      event.description = event.description.replace(/\n?\[busy\]/, '');
-      message = message + ' (<code>[busy]</code> removed from description)';
-    }
-  }
-
-  const patchedEvent: EventWithCalendarId = dirty ? patchCalendarEvent(event) : event;
-
-  const report: IReport = {event: patchedEvent, message};
-
-  return report;
-}
-
-function makeEventBeBusy(event: EventWithCalendarId): IReport  {
-  let message: string;
-  let dirty = false;
-
-  if (event.transparency === 'opaque') {
-    message = 'already <em>busy</em>';
-  } else {
-    dirty = true;
-    event.transparency = 'opaque';
-    message = 'made <em>busy</em>';
-  }
-  if (event.description && event.description.match(/\[busy\]/)) {
-    message += ' (<code>[busy]</code> already present in description)';
-  } else {
-    dirty = true;
-    event.description = event.description ? event.description + '\n[busy]' : '[busy]';
-  }
-
-  const patchedEvent: EventWithCalendarId = dirty ? patchCalendarEvent(event) : event;
-  const report: IReport = {event: patchedEvent, message};
-
-  return report;
-}
-
 function is_auto_processible_event(event: EventWithCalendarId): boolean  {
   return (event.description &&
     event.description.match(/tram home$|tram to|practice$|climbing$/) &&
@@ -342,7 +409,8 @@ function checkAndFixCalendar(calendarId: string): EventWithCalendarId[]  {
   removeAlerts(events.filter(is_block_event));
 
   // TODO:
-  // addTravelTime(events.filter(is_appointment));
+  // addTravelTime(events.filter(needsTravelTime));
+  // cloneToCalendar(events.filter(blocksTimeFor(calendar)));
 
   // Email list of noncomplying & blocking events in default calendar.
   if (calendarId === getProperty('defaultCalendar')) {
@@ -350,7 +418,7 @@ function checkAndFixCalendar(calendarId: string): EventWithCalendarId[]  {
       const lastNagged: number = (new Date(Number(getProperty(nagPropertyKey(event), false)))).getTime();
       const recentlyNagged: boolean = lastNagged && (lastNagged > threeDaysAgo) || false;
       const markedFree: boolean = (event.transparency === 'transparent');
-      const taggedBusy: boolean = !(!event.description || !event.description.match(/\[busy\]/));
+      const taggedBusy = !(!event.description || !event.description.match(/\[busy\]/));
       return !markedFree && !taggedBusy && !recentlyNagged;
     }).filter((event) => {
       if (is_auto_processible_event(event)) {
@@ -464,7 +532,7 @@ function checkEmail(): void {
 function clearOldNagTimestamps(): void {
   const threeDaysAgo: number = new Date().getTime() - 1000 * 60 * 60 * 24 * 3;
   const scriptProperties = PropertiesService.getScriptProperties();
-  const properties: IProperties = scriptProperties.getProperties() as IProperties;
+  const properties: Properties = scriptProperties.getProperties() as Properties;
   Object.keys(properties)
     .filter((key: string) => key.match(new RegExp('^' + NAG_PROPERTY_PREFIX)))
     .map((key: string) => {
@@ -480,10 +548,6 @@ function missingPropertyErrorMessage(property: string) {
   return 'No ' + property + ' script property: Set a calendar email address as the value for a `' + property +
     '` key as a "Script Property" (from the script editor on `script.google.com` > "Project properties" ' +
     '> "Script properties")';
-}
-
-function json_out(json: {}) {
-  return JSON.stringify(json, null, 2);
 }
 
 function include(filename: string) {  // called from Index.html
@@ -554,70 +618,9 @@ function nagPropertyKey(event: EventWithCalendarId): string  {
   return NAG_PROPERTY_PREFIX + event.id.toString();
 }
 
-function withCalendarId(calendarId: string,
-                        event: GoogleAppsScript.Calendar.Schema.Event | undefined): EventWithCalendarId  {
-  if (event) {
-    return new EventWithCalendarId(calendarId, event);
-  } else {
-    throw new Error('Error: Missing Event!');
-  }
-}
-
-function withCalendarIds(calendarId: string, events: GoogleAppsScript.Calendar.Schema.Event[]): EventWithCalendarId[]  {
-  return events.map((event) => new EventWithCalendarId(calendarId, event));
-}
-
-function getCalendarEvent(calendarId: string, eventId: string): EventWithCalendarId  {
-  const es = Calendar.Events as GoogleAppsScript.Calendar.Collection.EventsCollection;
-  const gEvent = es.get(calendarId, eventId);
-  if (typeof gEvent.id === 'string') {
-    return withCalendarId(calendarId, gEvent);
-  } else {
-    throw new Error('Error: Event with no id!' + JSON.stringify(gEvent));
-  }
-}
-
-function listCalendarEvents(calendarId: string): EventWithCalendarId[]  {
-  const es = Calendar.Events as GoogleAppsScript.Calendar.Collection.EventsCollection;
-  const gEvents = es.list(calendarId, {
-    maxResults: 50,
-    orderBy: 'startTime',
-    singleEvents: true,
-    timeMin: (new Date()).toISOString(),
-  });
-  if (gEvents.items) {
-    return withCalendarIds(calendarId, gEvents.items);
-  } else {
-    return [];
-  }
-}
-
-function patchCalendarEvent(event: EventWithCalendarId): EventWithCalendarId  {
-  const es = Calendar.Events as GoogleAppsScript.Calendar.Collection.EventsCollection;
-  return withCalendarId(event.calendarId, es.patch(event, event.calendarId, event.id as string));
-}
-
 // TODO: nice to have a version of this for type assertions
 function assert(test: boolean, ...rest: any[]): void | Error  {
   if (!test) {
     throw new Error('Error: ' + JSON.stringify(rest));
   }
 }
-
-const workaroundAssign = function(has) {
-  'use strict';
-  return assign;
-  function assign(target: any, ...source: any) {
-    for (const argument of source) {
-      copy(target, argument);
-    }
-    return target;
-  }
-  function copy(target: any, source: any) {
-    for (const key in source) {
-      if (has.call(source, key)) {
-        target[key] = source[key];
-      }
-    }
-  }
-}({}.hasOwnProperty);

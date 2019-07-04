@@ -20,12 +20,7 @@
     "esModuleInterop": true,
     "declaration": true,
     "declarationMap": true,
-    "emitDecoratorMetadata": true,
-    "plugins": [
-      {
-        "name": "typescript-tslint-plugin"
-      }
-    ]
+    "emitDecoratorMetadata": true
   },
   "exclude": [
     "node_modules"
