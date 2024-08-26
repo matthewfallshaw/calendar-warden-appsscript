@@ -8,7 +8,7 @@
     "typescript": "^5.2.2"
   },
   "devDependencies": {
-    "@types/google-apps-script": "1.0.71",
+    "@types/google-apps-script": "1.0.83",
     "@typescript-eslint/eslint-plugin": "^1.13.0",
     "@typescript-eslint/parser": "^1.13.0",
     "eslint": "^5.16.0"
