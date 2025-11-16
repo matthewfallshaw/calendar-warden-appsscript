@@ -11,7 +11,7 @@
     "@types/google-apps-script": "1.0.71",
     "@typescript-eslint/eslint-plugin": "^1.13.0",
     "@typescript-eslint/parser": "^1.13.0",
-    "eslint": "^5.16.0"
+    "eslint": "^9.39.1"
   },
   "scripts": {
     "test": "echo \"Error: no test specified\" && exit 1"
